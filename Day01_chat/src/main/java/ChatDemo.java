@@ -1,11 +1,15 @@
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 
 
 public class ChatDemo {
@@ -26,26 +30,53 @@ public class ChatDemo {
                 .uri(URI.create("https://api.deepseek.com/chat/completions"))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + key)
+                //逐行返回
                 .POST(HttpRequest.BodyPublishers.ofString(order))
                 .build();
         // 发送请求并获取响应
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
+        HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        BufferedReader reader = new BufferedReader(
+                new InputStreamReader(response.body(), StandardCharsets.UTF_8));
 //        // 打印响应状态码
 //        System.out.println("Response status code: " + response.statusCode());
 //        // 打印响应体
 //        System.out.println(response.body());
 
+        // 用于存储完整响应
+        StringBuilder sb = new StringBuilder();
         ObjectMapper mapper = new ObjectMapper();
-        JsonNode root = mapper.readTree(response.body());
+//        // 提取初始响应内容
+//        String content = root.path("choices")
+//                .get(0)
+//                .path("message")
+//                .path("content")
+//                .asText();
 
-        String content = root.path("choices")
-                .get(0)
-                .path("message")
-                .path("content")
-                .asText();
+        // 逐行读取响应体
+        String line;
+        while ((line = reader.readLine()) != null) {
+            if(line.isEmpty()){
+                continue;
+            }
+            if(!line.startsWith("data:")){
+                continue;
+            }
+            String data = line.substring(5).trim();
+            if(data.equals("[DONE]")) {
+                break;
+            }
+            // 解析当前行数据
+            JsonNode node = mapper.readTree(data);
+            JsonNode contentNode = node.path("choices").path(0).path("delta").path("content");
+            if (contentNode.isTextual()) {
+                String piece = contentNode.asText();
+                System.out.print(piece);
+                System.out.flush();
+                sb.append(piece);
+            }
 
-        System.out.println(content);
+        }
+
 
     }
 }
