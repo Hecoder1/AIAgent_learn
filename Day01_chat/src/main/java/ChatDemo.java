@@ -10,9 +10,13 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 
 
 public class ChatDemo {
+    // 用于存储完整响应
+    static StringBuilder sb = new StringBuilder();
+    static ObjectMapper mapper = new ObjectMapper();
     public static void main(String[] args) throws IOException, InterruptedException {
         // 获取环境变量中的API密钥
         String key=System.getenv("DEEPSEEK_API_KEY");
@@ -23,18 +27,55 @@ public class ChatDemo {
         }
         // 定义请求体
         String order = "{\"model\":\"deepseek-flash\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}]}";
-        // 创建HTTP客户端
-        HttpClient client = HttpClient.newHttpClient();
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            try {
+                askDeepSeek(key, order);
+                break;      // 成功
+            } catch (IOException e) {
+                if (sb.length() > 0) {
+                    System.out.println("\n回答传了一半断了，为避免重复输出，不重试");
+                    return;
+                }
+                if (attempt == 3) { System.out.println("3 次全失败：" + e); return; }
+                long wait = 1000L << (attempt - 1);   // 1000 → 2000 → 4000 毫秒
+                System.out.println("第 " + attempt + " 次失败，" + wait + "ms 后重试…");
+                Thread.sleep(wait);
+            }
+        }
+
+
+    }
+
+    private static void askDeepSeek(String key, String order) throws IOException, InterruptedException {
+        // 创建HTTP客户端(设置超时时间)
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(30))
+                .build();
         // 创建HTTP请求
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create("https://api.deepseek.com/chat/completions"))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + key)
+                // 设置请求超时时间
+                .timeout(Duration.ofSeconds(30))
                 //逐行返回
                 .POST(HttpRequest.BodyPublishers.ofString(order))
                 .build();
         // 发送请求并获取响应
         HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+
+        // 检查响应状态码
+        int code = response.statusCode();
+        if (code == 429 || code >= 500) {
+            throw new IOException("HTTP " + code);   // 服务器临时不接待 → 抛出去让重试循环接住
+        }
+        if (code != 200) {
+            System.out.println("HTTP " + code + "（401=key错 402=欠费 400=订单写错，重试没用）："
+                    + new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
+            return;
+        }
+
+        // 读取响应体
         BufferedReader reader = new BufferedReader(
                 new InputStreamReader(response.body(), StandardCharsets.UTF_8));
 //        // 打印响应状态码
@@ -42,9 +83,7 @@ public class ChatDemo {
 //        // 打印响应体
 //        System.out.println(response.body());
 
-        // 用于存储完整响应
-        StringBuilder sb = new StringBuilder();
-        ObjectMapper mapper = new ObjectMapper();
+
 //        // 提取初始响应内容
 //        String content = root.path("choices")
 //                .get(0)
@@ -76,7 +115,5 @@ public class ChatDemo {
             }
 
         }
-
-
     }
 }
